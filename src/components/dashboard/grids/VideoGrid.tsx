@@ -29,11 +29,22 @@ function isVisible() {
     if (typeof document === 'undefined') return true;
     return document.visibilityState === 'visible';
 }
+const nextDelayMs = (n: number) => {
+  if (n <= 2) return 1000;
+  if (n <= 5) return 3000;
+  if (n <= 8) return 8000;
+  if (n <= 12) return 15000;
+  return 30000;
+};
 
 // ---- HLS Player ----
 const HLSPlayer: React.FC<HLSPlayerProps> = ({ src }) => {
     const videoRef = useRef<HTMLVideoElement | null>(null);
     const hlsRef = useRef<Hls | null>(null);
+
+    const reconnectingRef = useRef(false);
+    const retryCountRef = useRef(0);
+    const unlockT = useRef<number | null>(null);
 
     const [error, setError] = useState(false);
     const [_isReady, setIsReady] = useState(false);
@@ -99,17 +110,29 @@ const HLSPlayer: React.FC<HLSPlayerProps> = ({ src }) => {
     };
 
     const hardReconnect = ({ silent = false }: { silent?: boolean } = {}) => {
-        const v = videoRef.current;
-        setError(false);
-        if (!silent) setSpinner(true);
+      if (reconnectingRef.current) return;
+      reconnectingRef.current = true;
 
-        destroyHls();
-        if (v) {
-            detachVideoEvents(v);
-            v.removeAttribute('src');
-            try { v.load?.(); } catch { }
+      const v = videoRef.current;
+      setError(false);
+      if (!silent) setSpinner(true);
+
+      destroyHls();
+      if (v) {
+        detachVideoEvents(v);
+        v.removeAttribute('src');
+        try { v.load?.(); } catch {}
+      }
+
+      setup();
+
+      if (unlockT.current) {
+          clearTimeout(unlockT.current);
+          unlockT.current = null;
         }
-        setup();
+      unlockT.current = window.setTimeout(() => {
+        reconnectingRef.current = false;
+      }, 800) as any;
     };
 
     // ---- video events ----
@@ -306,7 +329,10 @@ const HLSPlayer: React.FC<HLSPlayerProps> = ({ src }) => {
 
             const v = videoRef.current;
             if (v) detachVideoEvents(v);
-
+            if (unlockT.current) {
+              clearTimeout(unlockT.current);
+              unlockT.current = null;
+            }
             destroyHls();
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -382,25 +408,47 @@ const HLSPlayer: React.FC<HLSPlayerProps> = ({ src }) => {
 
     // ---- 워치독: visible일 때만, 백업용 ----
     useEffect(() => {
-        const interval = window.setInterval(() => {
-            const v = videoRef.current;
-            if (!v) return;
-            if (!isVisible()) return;
+      let t: number | null = null;
 
-            const now = Date.now();
-            const idleMs = now - lastUpdateRef.current;
+      const tick = () => {
+        const v = videoRef.current;
+        if (!v || !isVisible()) {
+          t = window.setTimeout(tick, 4000) as any;
+          return;
+        }
 
-            if (idleMs > 8000 && idleMs <= 16000) {
-                softReload();
-            } else if (idleMs > 16000) {
-                hardReconnect({ silent: true });
-            }
-        }, 4000);
+        const now = Date.now();
+        const idleMs = now - lastUpdateRef.current;
 
-        return () => {
-            window.clearInterval(interval);
-        };
+        // 정상 재생이면 backoff 리셋
+        if (!v.paused && v.readyState >= 2 && idleMs < 4000) {
+          retryCountRef.current = 0;
+          t = window.setTimeout(tick, 4000) as any;
+          return;
+        }
+
+        if (idleMs > 8000 && idleMs <= 16000) {
+          softReload();
+          t = window.setTimeout(tick, 4000) as any;
+          return;
+        }
+
+        if (idleMs > 16000) {
+          const delay = nextDelayMs(retryCountRef.current);
+          retryCountRef.current += 1;
+
+          hardReconnect({ silent: true });
+          t = window.setTimeout(tick, delay) as any;
+          return;
+        }
+
+        t = window.setTimeout(tick, 4000) as any;
+      };
+
+      t = window.setTimeout(tick, 4000) as any;
+      return () => { if (t) clearTimeout(t); };
     }, []);
+
 
     return (
         <div style={{ width: '100%', height: '100%', position: 'relative', background: '#000' }}>
