@@ -105,6 +105,7 @@ const HLSPlayer: React.FC<HLSPlayerProps> = ({ src }) => {
 
         destroyHls();
         if (v) {
+            detachVideoEvents(v);
             v.removeAttribute('src');
             try { v.load?.(); } catch { }
         }
@@ -186,6 +187,8 @@ const HLSPlayer: React.FC<HLSPlayerProps> = ({ src }) => {
         const v = videoRef.current;
         if (!v) return;
 
+        detachVideoEvents(v);
+
         if (!src || !src.trim()) {
             setError(true);
             return;
@@ -259,6 +262,22 @@ const HLSPlayer: React.FC<HLSPlayerProps> = ({ src }) => {
             h.on(Hls.Events.ERROR, (_e, data) => {
                 if (!data) return;
 
+                // 1) HTTP 응답 코드가 잡히는 경우 (manifest/frag 요청)
+                const code = (data as any)?.response?.code;
+
+                // ✅ 404 = 스트림/경로 없음 → 재연결 루프 중단
+                if (code === 404) {
+                    console.warn('[HLS] 404 Not Found. Stop reconnect loop:', src);
+                    setError(true);
+                    setSpinner(false);
+
+                    // 더 이상 쓸모 없는 로더/리스너 정리
+                    try { h.stopLoad(); } catch { }
+                    destroyHls();            // hlsRef.current.destroy() + null 처리 (너가 만든 함수)
+                    return;
+                }
+
+                // 2) fatal이 아닌 경우: 기존처럼 가볍게 재시도
                 if (!data.fatal) {
                     setSpinner(true);
                     try { h.startLoad(-1); } catch { }
@@ -266,7 +285,8 @@ const HLSPlayer: React.FC<HLSPlayerProps> = ({ src }) => {
                     return;
                 }
 
-                // fatal 은 그냥 바로 재연결 (복잡하게 끌지 말고)
+                // 3) fatal인데 404는 아닌 경우: 기존처럼 재연결
+                console.warn('[HLS] fatal error. Reconnect:', data);
                 hardReconnect({ silent: false });
             });
 

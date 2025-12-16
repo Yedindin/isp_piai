@@ -49,7 +49,20 @@ const DGSPDashboard: React.FC = () => {
     // const isTablet = useMediaQuery(theme.breakpoints.between('sm', 'md')); // 600~899px
     // const isDesktop = useMediaQuery(theme.breakpoints.up('md'));    // ≥900px
     // const isXL = useMediaQuery(theme.breakpoints.up('xl'));         // ≥1536px
+     useEffect(() => {
+        // 1시간마다 새로고침
+        const REFRESH_INTERVAL_MS = 1000 * 60 * 60;
 
+        const id = window.setInterval(() => {
+            // 탭이 실제로 보이는 상태일 때만 새로고침
+            if (document.visibilityState === 'visible') {
+                window.location.reload();
+            }
+        }, REFRESH_INTERVAL_MS);
+
+        // 언마운트 시 인터벌 정리
+        return () => window.clearInterval(id);
+    }, []);
     // ----- 알람 관련 -----
     const API_BASE = useMemo(() => (import.meta.env.VITE_API_BASE ?? '').replace(/([^:]\/)\/+/g, '$1'), []);
     // const {connected, lastEvent, error } = useAlertStreamCORS({ site: 'DGSP' });
